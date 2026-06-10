@@ -385,15 +385,6 @@ This project demonstrates:
 
 ---
 
-# 👩‍💻 Author
-
-**Sneha Sooraj**
-
-B.Tech Computer Science Engineering Student
-AI/ML Enthusiast | Full-Stack Developer
-
----
-
 # ⭐ Future Enhancements
 
 * Advanced Analytics Dashboard
