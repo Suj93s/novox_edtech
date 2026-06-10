@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+supabase
+pydantic-settings
+openai
+google-antigravity
+python-multipart
+pypdf
+
