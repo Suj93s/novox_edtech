@@ -38,8 +38,23 @@ def setup_mock_environment():
         def __init__(self, data=None):
             self.data = data or []
         def select(self, *args, **kwargs): return self
-        def insert(self, *args, **kwargs): return self
-        def update(self, *args, **kwargs): return self
+        def insert(self, data, *args, **kwargs):
+            if not self.data:
+                if isinstance(data, list):
+                    self.data = data
+                else:
+                    mock_record = data.copy()
+                    if "id" not in mock_record:
+                        mock_record["id"] = "mock-uuid-123"
+                    self.data = [mock_record]
+            return self
+        def update(self, data, *args, **kwargs):
+            if self.data:
+                for item in self.data:
+                    item.update(data)
+            else:
+                self.data = [data]
+            return self
         def delete(self, *args, **kwargs): return self
         def eq(self, *args, **kwargs): return self
         def order(self, *args, **kwargs): return self

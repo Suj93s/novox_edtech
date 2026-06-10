@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     ROUTE_DEBUGGING_QUESTION: str = "google/gemini-2.5-pro"
     ROUTE_DOCUMENT_HEAVY_QUESTION: str = "google/gemini-2.5-pro"
     
+    # Socratic Guardrail settings
+    GUARDRAILS_ENABLED: bool = True
+    SOCRATIC_STRICTNESS: str = "strict"  # "strict" or "moderate"
+    
     class Config:
         env_file = ".env"
 

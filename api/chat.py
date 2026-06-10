@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+from fastapi.responses import StreamingResponse
 from models.domain import ChatRequest, ChatResponse
-from agents.mentor_agent import process_chat_message
+from agents.mentor_agent import process_chat_message, process_chat_message_stream
 from services.chat_service import (
     create_chat_session,
     get_chat_session,
@@ -134,6 +135,129 @@ async def chat_endpoint(
         raise HTTPException(
             status_code=500, 
             detail="The Mentor AI was unable to process your request. Please try again later."
+        )
+
+@router.post("/chat/stream")
+async def chat_stream_endpoint(
+    request: ChatRequest, 
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    Main chat streaming endpoint.
+    Enforces JWT authentication and session ownership constraints.
+    Progressively streams AI tokens as Server-Sent Events (SSE).
+    """
+    session_id = request.session_id
+    
+    try:
+        # 1. Validate Session Ownership if session_id is provided
+        if session_id:
+            logger.info(f"Checking ownership for session: {session_id} by user {user_id}")
+            session = get_chat_session(session_id)
+            if not session:
+                raise HTTPException(status_code=404, detail="Chat session not found.")
+            if str(session.get("user_id")) != user_id:
+                logger.warning(f"Unauthorized access attempt by user {user_id} on session {session_id} owned by {session.get('user_id')}")
+                raise HTTPException(
+                    status_code=403, 
+                    detail="Access denied. You do not own this chat session."
+                )
+        else:
+            # 2. Automatically create a new session if session_id is not provided
+            logger.info(f"No session_id provided. Creating a new chat session automatically for user {user_id}")
+            session_id = create_chat_session(user_id)
+            
+        # 3. Load or automatically create the student profile
+        logger.info(f"Loading student profile for user: {user_id}")
+        student_profile = get_or_create_profile(user_id)
+        
+        # 4. Resolve Curriculum Context (Priority: 1. module_id, 2. course_name + module_title)
+        curriculum_context = None
+        if request.module_id:
+            logger.info(f"Retrieving curriculum module by module_id: {request.module_id}")
+            curriculum_context = get_module_by_id(request.module_id)
+            if not curriculum_context:
+                logger.warning(f"No curriculum module found for ID: {request.module_id}")
+        elif request.course_name and request.module_title:
+            logger.info(f"Retrieving curriculum module by titles: {request.course_name} - {request.module_title}")
+            curriculum_context = get_module(request.course_name, request.module_title)
+            if not curriculum_context:
+                logger.warning(f"No curriculum module found for course '{request.course_name}' and module '{request.module_title}'")
+        
+        # 5. Resolve Student Mastery score if curriculum module is loaded
+        student_mastery = None
+        if curriculum_context:
+            module_id = curriculum_context["id"]
+            logger.info(f"Loading/Initializing student mastery for user {user_id} and module {module_id}")
+            student_mastery = get_or_create_mastery(user_id, module_id)
+            
+        # 6. Save the user's message to the database
+        logger.info(f"Saving user message to session {session_id}")
+        save_message(session_id, "user", request.message)
+        
+        # 7. Retrieve all session messages (history) to pass context to the Mentor AI
+        logger.info(f"Retrieving session messages for {session_id} to prepare context.")
+        history = get_session_messages(session_id)
+        
+        # 8. Retrieve relevant document chunks for the user's message
+        logger.info(f"Performing document similarity search for query: '{request.message}' by user {user_id}")
+        retrieved_chunks = await search_relevant_chunks(request.message, user_id)
+
+        # 9. Classify message and determine targeted LLM via Model Router
+        selected_model, category = await route_model(
+            message=request.message,
+            history=history,
+            retrieved_chunks=retrieved_chunks,
+            request_override=request.model_override
+        )
+        logger.info(f"Routed request to model '{selected_model}' based on category '{category}'")
+
+        # 10. Generate streaming generator wrapper
+        async def event_generator():
+            accumulated_response = []
+            try:
+                # First yield the session_id so frontend has it immediately
+                import json
+                yield f"data: {json.dumps({'session_id': session_id})}\n\n"
+                
+                # Generate progressive tokens
+                async for token in process_chat_message_stream(
+                    history, 
+                    student_profile=student_profile,
+                    curriculum_context=curriculum_context,
+                    student_mastery=student_mastery,
+                    retrieved_chunks=retrieved_chunks,
+                    model_name=selected_model
+                ):
+                    accumulated_response.append(token)
+                    yield f"data: {json.dumps({'token': token})}\n\n"
+                
+                # 11. Save the final assistant response to DB
+                complete_ai_response = "".join(accumulated_response)
+                if complete_ai_response.strip():
+                    logger.info(f"Saving final completed stream response to session {session_id}")
+                    save_message(session_id, "assistant", complete_ai_response)
+                    # 12. Trigger background analysis task
+                    queue_analysis_task(background_tasks, session_id, user_id)
+            except Exception as stream_err:
+                logger.error(f"Error yielding stream tokens: {stream_err}", exc_info=True)
+                yield f"data: {json.dumps({'error': 'An error occurred during response streaming.'})}\n\n"
+
+        return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+    except HTTPException as http_ex:
+        raise http_ex
+    except Exception as e:
+        logger.error(f"Error in streaming endpoint init: {e}", exc_info=True)
+        if "foreign key" in str(e).lower() or "uuid" in str(e).lower():
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Invalid or non-existent session_id: {session_id}"
+            )
+        raise HTTPException(
+            status_code=500, 
+            detail="The Mentor AI was unable to initialize response streaming."
         )
 
 
