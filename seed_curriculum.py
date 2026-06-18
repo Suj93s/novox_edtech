@@ -13,30 +13,42 @@ logger = logging.getLogger(__name__)
 from services.curriculum_service import create_module, get_module
 
 def seed():
-    course_name = "Advanced Java"
-    module_title = "Recursion and Memory"
-    concepts = [
-        "recursive functions",
-        "call stack",
-        "base case",
-        "memory usage"
+    modules_to_seed = [
+        {
+            "course_name": "Development",
+            "module_title": "Development Master Track",
+            "concepts": ["react", "flutter", "python", "mern", "system design"]
+        },
+        {
+            "course_name": "Design",
+            "module_title": "Design Master Track",
+            "concepts": ["ui/ux", "graphic design", "video editing", "figma"]
+        },
+        {
+            "course_name": "Marketing",
+            "module_title": "Marketing Master Track",
+            "concepts": ["seo", "paid ads", "social media", "analytics"]
+        }
     ]
     
-    logger.info("Checking if seed data already exists...")
+    logger.info("Checking if database tables exist...")
     try:
-        existing = get_module(course_name, module_title)
+        # Probe database availability using the first module
+        get_module(modules_to_seed[0]["course_name"], modules_to_seed[0]["module_title"])
     except Exception as e:
         if "Could not find the table" in str(e):
             logger.error("Seeding failed because database tables are not yet created. Please run schema.sql in Supabase SQL editor first.")
             return
         raise e
 
-    if existing:
-        logger.info(f"Seed data already exists (ID: {existing['id']})")
-    else:
-        logger.info("Inserting seed data...")
-        new_module = create_module(course_name, module_title, concepts)
-        logger.info(f"Seeded successfully! Module ID: {new_module['id']}")
+    for mod in modules_to_seed:
+        existing = get_module(mod["course_name"], mod["module_title"])
+        if existing:
+            logger.info(f"Seed data already exists for {mod['course_name']} - {mod['module_title']} (ID: {existing['id']})")
+        else:
+            logger.info(f"Inserting seed data for {mod['course_name']} - {mod['module_title']}...")
+            new_module = create_module(mod["course_name"], mod["module_title"], mod["concepts"])
+            logger.info(f"Seeded successfully! Module ID: {new_module['id']}")
 
 if __name__ == "__main__":
     try:
